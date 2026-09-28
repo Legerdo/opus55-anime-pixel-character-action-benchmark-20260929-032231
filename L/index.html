@@ -485,7 +485,9 @@ const es = document.getElementById('equal-display-size-example');
 const prev = ORDER.map(k => ({ k, c: document.querySelector('[data-animation-preview="' + k + '"]'), last: -1 }));
 const t0 = performance.now();
 function tick(now) {
-  const t = now - t0;
+  // A first requestAnimationFrame timestamp can predate t0 in a resumed or throttled tab.
+  // Clamp it so modulo-based frame selection never produces a negative index.
+  const t = Math.max(0, now - t0);
   for (const p of prev) {
     const n = FR[p.k].length, ms = TIMING[p.k];
     const i = (p.k === 'idle' || p.k === 'run') ? Math.floor(t / ms) % n : Math.min(n - 1, Math.floor((t % (n * ms + 400)) / ms));
