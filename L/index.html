@@ -1,0 +1,520 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'">
+<title>L 80x112 — Silver Twin-tail Magic Fencer</title>
+<script>window.__errs = []; addEventListener('error', e => window.__errs.push(String(e.message)));</script>
+<style>
+body{margin:0;padding:24px;background:#1c1e2a;color:#e8e8f2;font:14px/1.5 system-ui,sans-serif}
+h1{font-size:20px;margin:0 0 4px}h2{font-size:16px;margin:28px 0 10px}
+.row{display:flex;flex-wrap:wrap;gap:14px;align-items:flex-start}
+.cell{display:flex;flex-direction:column;gap:4px;align-items:center}
+.chk{line-height:0;background-color:#cfd1dc;background-image:linear-gradient(45deg,#b3b6c6 25%,transparent 25%,transparent 75%,#b3b6c6 75%),linear-gradient(45deg,#b3b6c6 25%,transparent 25%,transparent 75%,#b3b6c6 75%);background-size:16px 16px;background-position:0 0,8px 8px}
+canvas{display:block;image-rendering:pixelated;background:transparent}
+.lbl{font-size:12px;color:#aab}
+pre{font-size:11px;color:#8c8fa6;white-space:pre-wrap}
+</style>
+</head>
+<body>
+<h1>Silver Twin-tail Magic Fencer — L (design 80×112, frame 140×168)</h1>
+<p class="lbl">All pixels are drawn in code (Canvas 2D putImageData, integer coordinates, no smoothing). Foot baseline y=140.</p>
+
+<section id="animation-preview">
+<h2>Live preview (2×)</h2>
+<div class="row">
+<div class="cell"><div class="chk"><canvas id="idle-preview" data-animation-preview="idle" width="140" height="168" style="width:280px;height:336px"></canvas></div><span class="lbl">Idle · 2f · 500 ms</span></div>
+<div class="cell"><div class="chk"><canvas id="run-preview" data-animation-preview="run" width="140" height="168" style="width:280px;height:336px"></canvas></div><span class="lbl">Run · 6f loop · 90 ms</span></div>
+<div class="cell"><div class="chk"><canvas id="attack-a-preview" data-animation-preview="attack-a" width="140" height="168" style="width:280px;height:336px"></canvas></div><span class="lbl">Attack A · 6f · 100 ms (+400 ms preview pause)</span></div>
+<div class="cell"><div class="chk"><canvas id="attack-b-preview" data-animation-preview="attack-b" width="140" height="168" style="width:280px;height:336px"></canvas></div><span class="lbl">Attack B · 6f · 100 ms (+400 ms preview pause)</span></div>
+</div>
+</section>
+
+<section>
+<h2>Contact sheet (20 frames, 2×)</h2>
+<div id="contact-sheet" class="row"></div>
+</section>
+
+<section>
+<h2>Native 1× samples</h2>
+<div id="native-size-example" class="row"></div>
+</section>
+
+<section>
+<h2>Equal display size (frame 480×576 CSS px, character ≈384 px)</h2>
+<div id="equal-display-size-example" class="row"></div>
+</section>
+
+<pre id="selftest"></pre>
+
+<script>
+'use strict';
+// ===== core pixel utilities =====
+const W = 140, H = 168, D = Math.PI / 180, R = Math.round, BL = 34;
+const CC = {};
+function rgb(c) { return CC[c] || (CC[c] = [parseInt(c.slice(1, 3), 16), parseInt(c.slice(3, 5), 16), parseInt(c.slice(5, 7), 16)]); }
+class Img {
+  constructor() { this.d = new Uint8ClampedArray(W * H * 4); }
+  set(x, y, c) {
+    x = R(x); y = R(y);
+    if (x < 0 || y < 0 || x >= W || y >= H) return;
+    const i = (y * W + x) * 4, v = rgb(c);
+    this.d[i] = v[0]; this.d[i + 1] = v[1]; this.d[i + 2] = v[2]; this.d[i + 3] = 255;
+  }
+}
+const M = () => new Uint8Array(W * H);
+function g(m, x, y) { return x >= 0 && y >= 0 && x < W && y < H && m[y * W + x] === 1; }
+function put(m, x, y) { if (x >= 0 && y >= 0 && x < W && y < H) m[y * W + x] = 1; }
+function disc(m, cx, cy, r) {
+  cx = R(cx); cy = R(cy); const k = Math.ceil(r);
+  for (let y = -k; y <= k; y++) for (let x = -k; x <= k; x++) if (x * x + y * y <= r * r + 0.3) put(m, cx + x, cy + y);
+  return m;
+}
+function ell(m, cx, cy, rx, ry) {
+  cx = R(cx); cy = R(cy);
+  for (let y = -ry; y <= ry; y++) for (let x = -rx; x <= rx; x++) if ((x * x) / (rx * rx) + (y * y) / (ry * ry) <= 1.04) put(m, cx + x, cy + y);
+  return m;
+}
+function seg(m, ax, ay, bx, by, r1, r2) {
+  ax = R(ax); ay = R(ay); bx = R(bx); by = R(by); if (r2 === undefined) r2 = r1;
+  const k = Math.ceil(Math.max(r1, r2)) + 1;
+  const dx = bx - ax, dy = by - ay, L = dx * dx + dy * dy || 1;
+  for (let y = Math.min(ay, by) - k; y <= Math.max(ay, by) + k; y++)
+    for (let x = Math.min(ax, bx) - k; x <= Math.max(ax, bx) + k; x++) {
+      let t = ((x - ax) * dx + (y - ay) * dy) / L; t = t < 0 ? 0 : t > 1 ? 1 : t;
+      const px = ax + dx * t - x, py = ay + dy * t - y, r = r1 + (r2 - r1) * t;
+      if (px * px + py * py <= r * r + 0.3) put(m, x, y);
+    }
+  return m;
+}
+function poly(m, pts) {
+  pts = pts.map(p => [R(p[0]), R(p[1])]);
+  let y0 = 1e9, y1 = -1e9;
+  for (const p of pts) { y0 = Math.min(y0, p[1]); y1 = Math.max(y1, p[1]); }
+  for (let y = y0; y <= y1; y++) {
+    const xs = [];
+    for (let i = 0; i < pts.length; i++) {
+      const a = pts[i], b = pts[(i + 1) % pts.length];
+      if ((a[1] <= y && b[1] > y) || (b[1] <= y && a[1] > y)) xs.push(a[0] + (y - a[1]) * (b[0] - a[0]) / (b[1] - a[1]));
+    }
+    xs.sort((a, b) => a - b);
+    for (let i = 0; i + 1 < xs.length; i += 2) for (let x = Math.ceil(xs[i] - 0.01); x <= Math.floor(xs[i + 1] + 0.01); x++) put(m, x, y);
+  }
+  return m;
+}
+// Stamp a mask with selective outline + 2-3 tone cel shading (light from upper right-front).
+function stamp(img, m, p, o) {
+  o = o || {};
+  const d = o.d === undefined ? 2 : o.d, sx = o.sx === undefined ? -1 : o.sx, sy = o.sy === undefined ? 1 : o.sy;
+  if (p.o && o.ol !== false) {
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      if (m[y * W + x]) continue;
+      if (g(m, x - 1, y) || g(m, x + 1, y) || g(m, x, y - 1) || g(m, x, y + 1)) img.set(x, y, p.o);
+    }
+  }
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    if (!m[y * W + x]) continue;
+    let c = p.b;
+    if (d > 0 && p.s && ((sx && !g(m, x + sx * d, y)) || (sy && !g(m, x, y + sy * d)))) c = p.s;
+    else if (o.rim && p.h && (!g(m, x, y - 1) || !g(m, x + 1, y))) c = p.h;
+    img.set(x, y, c);
+  }
+}
+// Bresenham line, optionally clipped to a mask.
+function line(img, x0, y0, x1, y1, c, m) {
+  x0 = R(x0); y0 = R(y0); x1 = R(x1); y1 = R(y1);
+  const dx = Math.abs(x1 - x0), dy = -Math.abs(y1 - y0), sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1;
+  let e = dx + dy;
+  for (;;) {
+    if (!m || g(m, x0, y0)) img.set(x0, y0, c);
+    if (x0 === x1 && y0 === y1) break;
+    const e2 = 2 * e;
+    if (e2 >= dy) { e += dy; x0 += sx; }
+    if (e2 <= dx) { e += dx; y0 += sy; }
+  }
+}
+// Two-bone IK; picks the joint solution nearest the hint.
+function ik(a, b, l1, l2, hint) {
+  const dx = b[0] - a[0], dy = b[1] - a[1];
+  let d = Math.hypot(dx, dy); d = Math.max(1, Math.min(d, l1 + l2 - 0.01));
+  let c = (l1 * l1 + d * d - l2 * l2) / (2 * l1 * d); c = Math.max(-1, Math.min(1, c));
+  const t = Math.acos(c), base = Math.atan2(dy, dx);
+  const k1 = [a[0] + Math.cos(base + t) * l1, a[1] + Math.sin(base + t) * l1];
+  const k2 = [a[0] + Math.cos(base - t) * l1, a[1] + Math.sin(base - t) * l1];
+  const pick = hint && Math.hypot(k1[0] - hint[0], k1[1] - hint[1]) > Math.hypot(k2[0] - hint[0], k2[1] - hint[1]) ? k2 : k1;
+  return [R(pick[0]), R(pick[1])];
+}
+const lerp = (a, b, t) => [R(a[0] + (b[0] - a[0]) * t), R(a[1] + (b[1] - a[1]) * t)];
+
+// ===== palettes (each outline is a darker hue of its own material) =====
+const PAL = {
+  hair:   { o: '#5b4f7a', s: '#a9a4cf', b: '#dfddf3', h: '#ffffff' },
+  hairF:  { o: '#524770', s: '#9590bd', b: '#c7c4e3', h: '#e6e4f6' },
+  skin:   { o: '#b8695b', s: '#f3b49c', b: '#ffe3d2', h: '#fff4ec' },
+  skinF:  { o: '#a85e52', s: '#e39d86', b: '#f6c8b2' },
+  coat:   { o: '#14173a', s: '#252c5e', b: '#374284', h: '#5261ad' },
+  coatF:  { o: '#11132f', s: '#1f254f', b: '#2b346c' },
+  skirt:  { o: '#161a44', s: '#2f3d80', b: '#4358a8', h: '#6079cc' },
+  frill:  { o: '#8e92ba', s: '#d3d7ef', b: '#ffffff' },
+  boot:   { o: '#26150e', s: '#3d2418', b: '#5b3826', h: '#80553a' },
+  bootF:  { o: '#22130c', s: '#341e14', b: '#4a2d1f' },
+  cuff:   { o: '#26150e', s: '#5b3826', b: '#80553a' },
+  glove:  { o: '#26150e', s: '#3d2418', b: '#5e3c29' },
+  ribbon: { o: '#8b2352', s: '#e04f82', b: '#ff88b8', h: '#ffc6de' },
+  scarf:  { o: '#6c1832', s: '#b42c50', b: '#e3486c', h: '#ff7e97' },
+  scarfF: { o: '#5e142b', s: '#962441', b: '#c23a5a' },
+  gold:   { o: '#7a4d12', s: '#c98e2a', b: '#f6c84e', h: '#fff1a3' },
+  blade:  { o: '#2d4a78', s: '#9cc4e6', b: '#e4f6ff', h: '#ffffff' },
+  grip:   { o: '#1d1020', s: '#3a2140', b: '#4f2d57' }
+};
+const FX = { c: '#2ee8ff', cl: '#b5fbff', p: '#ff4fbf', pl: '#ffb8e8', w: '#ffffff' };
+</script>
+<script>
+'use strict';
+// ===== character parts =====
+function pathPts(x, y, a0, curve, wav, ph, n, len) {
+  const pts = [[R(x), R(y)]]; let px = x, py = y;
+  for (let i = 1; i <= n; i++) {
+    const a = (a0 + curve * i + wav * Math.sin(ph + i * 0.75) * i / n) * D;
+    px += Math.cos(a) * len; py += Math.sin(a) * len; pts.push([R(px), R(py)]);
+  }
+  return pts;
+}
+function drawTail(img, tie, t, pal) {
+  const pts = pathPts(tie[0], tie[1], t[0], t[1], t[2], t[3], 10, 5.2);
+  const n = pts.length - 1, m = M();
+  const rad = q => Math.max(1, 5.6 * Math.pow(Math.max(0, Math.sin(Math.PI * (0.16 + 0.84 * q))), 0.75));
+  for (let i = 0; i < n; i++) seg(m, pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1], rad(i / n), rad((i + 1) / n));
+  stamp(img, m, pal, { d: 2, rim: true });
+  for (let i = 1; i < n - 1; i++) {
+    const a = pts[i], b = pts[i + 1], dx = b[0] - a[0], dy = b[1] - a[1], l = Math.hypot(dx, dy) || 1;
+    const ox = -dy / l * 1.6, oy = dx / l * 1.6;
+    line(img, a[0] + ox, a[1] + oy, b[0] + ox, b[1] + oy, pal.s, m);
+  }
+}
+function bow(img, x, y) {
+  const m = M();
+  poly(m, [[x, y], [x - 4, y - 3], [x - 4, y + 2]]); poly(m, [[x, y], [x + 4, y - 3], [x + 4, y + 2]]); disc(m, x, y, 1.2);
+  stamp(img, m, PAL.ribbon, { d: 1, sx: 0 }); img.set(x, y, PAL.ribbon.h); img.set(x - 3, y - 1, PAL.ribbon.h);
+}
+function drawArm(img, s, e, h, far) {
+  const wr = lerp(e, h, 0.72);
+  let m = M(); seg(m, s[0], s[1], e[0], e[1], 3.4, 2.9); seg(m, e[0], e[1], wr[0], wr[1], 2.9, 2.5);
+  stamp(img, m, far ? PAL.coatF : PAL.coat, { d: 2 });
+  m = disc(M(), wr[0], wr[1], 2.2); stamp(img, m, PAL.frill, { d: 1, sx: 0 });
+}
+function drawHand(img, e, h, far) {
+  const m = disc(M(), h[0], h[1], 2.3); stamp(img, m, far ? PAL.bootF : PAL.glove, { d: 1 });
+  const dx = h[0] - e[0], dy = h[1] - e[1], l = Math.hypot(dx, dy) || 1, vert = Math.abs(dy) > Math.abs(dx);
+  const fx = R(h[0] + dx / l * 2), fy = R(h[1] + dy / l * 2), sk = far ? PAL.skinF : PAL.skin;
+  img.set(fx, fy, sk.b); img.set(fx + (vert ? 1 : 0), fy + (vert ? 0 : 1), sk.s); // bare fingertips (fingerless glove)
+}
+function drawLeg(img, hip, f, far) {
+  const an = [f[0], f[1]];
+  const kn = ik(hip, an, 26, 27, [hip[0] + 24, (hip[1] + an[1]) / 2]);
+  let m = seg(M(), hip[0], hip[1], kn[0], kn[1], 5, 3.8);
+  stamp(img, m, far ? PAL.skinF : PAL.skin, { d: 2 });
+  m = M(); const bt = lerp(kn, an, 0.08); seg(m, bt[0], bt[1], an[0], an[1], 4, 2.8);
+  const a = (f[2] || 0) * D, ca = Math.cos(a), sa = Math.sin(a);
+  poly(m, [[-3, -3], [-3, 3], [7, 3], [7, 1], [3, -3]].map(([x, y]) => [an[0] + x * ca - y * sa, an[1] + x * sa + y * ca]));
+  stamp(img, m, far ? PAL.bootF : PAL.boot, { d: 2 });
+  const c0 = lerp(kn, an, 0.03), c1 = lerp(kn, an, 0.18);
+  m = seg(M(), c0[0], c0[1], c1[0], c1[1], 4.3); stamp(img, m, PAL.cuff, { d: 1 });
+  return kn;
+}
+function drawSkirt(img, hx, hy, s, fl) {
+  let m = M();
+  for (let x = -13; x <= 12; x += 3) disc(m, hx + x + s, hy + 12 + (((x + 13) / 3) & 1 ? fl : 0), 1.7);
+  stamp(img, m, PAL.frill, { d: 1, sx: 0 });
+  m = poly(M(), [[hx - 8, hy - 7], [hx + 8, hy - 7], [hx + 13 + s, hy + 8], [hx + 11 + s, hy + 12], [hx - 12 + s, hy + 12 + fl], [hx - 15 + s, hy + 8]]);
+  stamp(img, m, PAL.skirt, { d: 3 });
+  for (const k of [-2, -1, 0, 1, 2]) line(img, hx + k * 3, hy - 5, hx + k * 5 + s, hy + 11, PAL.skirt.s, m);
+  line(img, hx + 1, hy - 4, hx + 3 + s, hy + 11, PAL.skirt.h, m);
+}
+function drawCoatTail(img, wx, wy, hy, s) {
+  const m = poly(M(), [[wx - 7, wy], [wx - 1, wy + 2], [wx - 5 + s, hy + 9], [wx - 13 + R(s * 1.6), hy + 7]]);
+  stamp(img, m, PAL.coat, { d: 2 });
+}
+function drawRibbon(img, x, y) {
+  const m = M();
+  poly(m, [[x, y], [x - 5, y - 3], [x - 4, y + 2]]); poly(m, [[x, y], [x + 5, y - 3], [x + 4, y + 2]]);
+  seg(m, x, y, x - 2, y + 6, 0.9); seg(m, x, y, x + 2, y + 6, 0.9); disc(m, x, y, 1.3);
+  stamp(img, m, PAL.ribbon, { d: 1 });
+  img.set(x, y - 1, PAL.ribbon.h); img.set(x + 3, y - 2, PAL.ribbon.h); img.set(x - 3, y - 2, PAL.ribbon.h);
+}
+function drawTorso(img, cx, cy, wx, wy) {
+  const m = poly(M(), [[cx - 7, cy - 3], [cx + 5, cy - 4], [cx + 9, cy + 2], [cx + 8, cy + 10], [wx + 7, wy], [wx + 9, wy + 4], [wx - 9, wy + 4], [wx - 8, wy], [cx - 9, cy + 7]]);
+  stamp(img, m, PAL.coat, { d: 3 });
+  const sm = poly(M(), [[cx - 2, cy - 3], [cx + 5, cy - 3], [cx + 2, cy + 4]]);
+  stamp(img, sm, PAL.frill, { ol: false, d: 1, sx: -1, sy: 0 });
+  line(img, cx + 3, cy + 4, wx + 4, wy + 3, PAL.coat.h, m);
+  line(img, cx + 4, cy + 5, wx + 5, wy + 3, PAL.coat.o, m);
+  for (const t of [0.4, 0.75]) { const p = lerp([cx + 6, cy + 5], [wx + 6, wy + 1], t); img.set(p[0], p[1], PAL.gold.b); }
+  const bm = seg(M(), wx - 8, wy + 1, wx + 8, wy + 1, 0.8);
+  for (let i = 0; i < W * H; i++) bm[i] &= m[i];
+  stamp(img, bm, PAL.boot, { d: 0, ol: false });
+  img.set(wx + 3, wy + 1, PAL.gold.b); img.set(wx + 4, wy + 1, PAL.gold.h); img.set(wx + 3, wy + 2, PAL.gold.s); img.set(wx + 4, wy + 2, PAL.gold.b);
+  drawRibbon(img, cx + 2, cy + 4);
+}
+function eye(img, x0, y0, near) {
+  const L = '#3b1f3a', Dk = '#7a1a3a', Md = '#b8304f', Pu = '#4a0c22', Lt = '#e4566a', Am = '#ffae52', Wt = '#ffffff', S = '#f4f2ff', LL = '#c07a6a';
+  const grid = near
+    ? ['LLLLLL', '.LDDDD', '.SMPWD', '.SMPWM', '.SLtMM', '..AAA.', '..lll.']
+    : ['LLLL', 'DDDL', 'MPW.', 'MPW.', 'LtM.', 'AA..', 'll..'];
+  const map = { L: L, D: Dk, M: Md, P: Pu, W: Wt, S: S, A: Am, l: LL };
+  const ox = near ? -1 : 0;
+  grid.forEach((row, r) => {
+    for (let i = 0, c = 0; i < row.length; i++, c++) {
+      let ch = row[i];
+      if (ch === 'L' && row[i + 1] === 't') { img.set(x0 + ox + c, y0 + r, Lt); i++; continue; }
+      if (ch !== '.') img.set(x0 + ox + c, y0 + r, map[ch]);
+    }
+  });
+  if (near) img.set(x0 + 1, y0 + 4, '#ffd6e6');
+}
+function drawHead(img, hx, hy, P) {
+  let m = seg(M(), hx + 8, hy - 5, hx + 10, hy + 7, 2, 1); stamp(img, m, PAL.hairF, { d: 1 });
+  const face = ell(M(), hx, hy, 10, 10);
+  poly(face, [[hx - 8, hy + 3], [hx + 10, hy + 1], [hx + 6, hy + 9], [hx + 3, hy + 12], [hx - 3, hy + 9]]);
+  stamp(img, face, PAL.skin, { d: 2 });
+  const fr = M();
+  poly(fr, [[hx - 12, hy - 3], [hx - 10, hy - 10], [hx - 4, hy - 14], [hx + 4, hy - 14], [hx + 10, hy - 9], [hx + 12, hy - 2],
+    [hx + 11, hy + 1], [hx + 9, hy - 4], [hx + 7, hy - 1], [hx + 5, hy - 5], [hx + 2, hy - 2], [hx, hy - 6], [hx - 3, hy - 1], [hx - 5, hy - 5], [hx - 7, hy - 1], [hx - 9, hy + 2]]);
+  seg(fr, hx - 10, hy - 4, hx - 11, hy + 11, 2.4, 1.2);
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++)
+    if (g(face, x, y) && !g(fr, x, y) && (g(fr, x, y - 1) || g(fr, x, y - 2))) img.set(x, y, PAL.skin.s);
+  // brows, eyes, blush, nose, mouth
+  line(img, hx - 5, hy - 3, hx - 2, hy - 3, PAL.hair.o); line(img, hx + 4, hy - 3, hx + 6, hy - 3, PAL.hair.o);
+  eye(img, hx - 5, hy, true); eye(img, hx + 4, hy, false);
+  for (const x of [hx - 4, hx - 3, hx - 2, hx + 6, hx + 7]) img.set(x, hy + 7, '#ffabb4');
+  img.set(hx + 8, hy + 4, PAL.skin.s);
+  if (P.mouth === 'open') {
+    for (const x of [hx + 2, hx + 3, hx + 4]) img.set(x, hy + 8, '#7a2233');
+    img.set(hx + 3, hy + 9, '#ff8fa0'); img.set(hx + 4, hy + 9, '#ff8fa0'); img.set(hx + 3, hy + 10, '#b04a58');
+  } else if (P.mouth === 'line') {
+    img.set(hx + 3, hy + 9, '#b04a58'); img.set(hx + 4, hy + 9, '#b04a58');
+  } else {
+    img.set(hx + 2, hy + 8, '#b04a58'); img.set(hx + 3, hy + 9, '#b04a58'); img.set(hx + 4, hy + 9, '#b04a58'); img.set(hx + 5, hy + 8, '#d9837f');
+  }
+  stamp(img, fr, PAL.hair, { d: 2, rim: true });
+  line(img, hx - 3, hy - 12, hx - 4, hy - 3, PAL.hair.s, fr); line(img, hx + 3, hy - 12, hx + 5, hy - 5, PAL.hair.s, fr); line(img, hx + 8, hy - 9, hx + 10, hy - 3, PAL.hair.s, fr);
+  for (let x = hx - 8; x <= hx + 5; x++) { // angel ring
+    const yy = hy - 10 + R(((x - (hx - 2)) / 7) ** 2 * 2.2);
+    if (g(fr, x, yy)) img.set(x, yy, '#ffffff');
+    if (g(fr, x, yy + 1)) img.set(x, yy + 1, PAL.hair.s);
+  }
+  bow(img, hx - 11, hy - 8); bow(img, hx + 8, hy - 11);
+}
+function drawHairBack(img, hx, hy) {
+  const m = ell(M(), hx - 1, hy - 3, 13, 12);
+  poly(m, [[hx - 13, hy - 3], [hx - 2, hy - 3], [hx - 1, hy + 14], [hx - 6, hy + 17], [hx - 13, hy + 12]]);
+  stamp(img, m, PAL.hair, { d: 2 });
+  line(img, hx - 8, hy + 2, hx - 8, hy + 14, PAL.hair.s, m);
+}
+function drawScarfWrap(img, cx, cy) {
+  const m = seg(M(), cx - 6, cy - 3, cx + 5, cy - 3, 2.6); disc(m, cx - 5, cy - 1, 2.4);
+  stamp(img, m, PAL.scarf, { d: 1 });
+  line(img, cx - 3, cy - 4, cx + 4, cy - 4, PAL.scarf.h, m);
+}
+function drawSword(img, h, ang, glow, fi) {
+  const u = [Math.cos(ang * D), Math.sin(ang * D)], v = [-u[1], u[0]];
+  const Q = (t, s) => [R(h[0] + u[0] * t + v[0] * (s || 0)), R(h[1] + u[1] * t + v[1] * (s || 0))];
+  let a = Q(-5), b = Q(3), m = seg(M(), a[0], a[1], b[0], b[1], 1.1); stamp(img, m, PAL.grip, { d: 0 });
+  a = Q(-6); m = disc(M(), a[0], a[1], 1.4); stamp(img, m, PAL.gold, { d: 0 });
+  a = Q(5); b = Q(4 + BL); m = seg(M(), a[0], a[1], b[0], b[1], 0.9, 0.4); stamp(img, m, PAL.blade, { d: 1, sx: 0 });
+  a = Q(6); b = Q(2 + BL); line(img, a[0], a[1], b[0], b[1], '#ffffff', m);
+  a = Q(4, -4); b = Q(4, 4); m = seg(M(), a[0], a[1], b[0], b[1], 0.9); const cq = Q(3, 1); disc(m, cq[0], cq[1], 2);
+  stamp(img, m, PAL.gold, { d: 1 });
+  for (let t = 9; t <= BL; t += 4) { // ether frost on the blade
+    const k = ((t / 4) | 0) + fi;
+    const p = Q(4 + t, k % 2 ? 2 : -2); img.set(p[0], p[1], k % 3 === 0 ? FX.p : FX.c);
+    if (glow > 1) { const q = Q(6 + t, k % 2 ? -3 : 3); img.set(q[0], q[1], k % 2 ? FX.pl : FX.cl); }
+  }
+  return Q(4 + BL);
+}
+function drawChar(img, P, fi) {
+  const hx0 = P.h[0], hy0 = P.h[1], cx = P.c[0], cy = P.c[1], hx = P.hd[0], hy = P.hd[1] + 2;
+  const wx = R(hx0 + (cx - hx0) * 0.3), wy = hy0 - 7;
+  for (let k = 1; k >= 0; k--) { // scarf tails (behind)
+    const pts = pathPts(cx - 6, cy - 1 + k, P.sc[0] + k * 10, P.sc[1], P.sc[2], P.sc[3] + k * 1.4, 7 - k * 2, 4.6), m = M();
+    for (let i = 0; i + 1 < pts.length; i++) seg(m, pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1], 2.5 - i * 0.1, 2.5 - (i + 1) * 0.1);
+    stamp(img, m, k ? PAL.scarfF : PAL.scarf, { d: 1 });
+  }
+  drawTail(img, [hx + 8, hy - 11], P.tF, PAL.hairF);
+  drawTail(img, [hx - 11, hy - 8], P.tN, PAL.hair);
+  drawCoatTail(img, wx, wy, hy0, P.sk);
+  const sF = [cx + 6, cy], eF = ik(sF, P.hF, 15, 14, P.eF);
+  drawArm(img, sF, eF, P.hF, true); drawHand(img, eF, P.hF, true);
+  drawHairBack(img, hx, hy);
+  drawLeg(img, [hx0 + 3, hy0 - 1], P.fB, true);
+  drawLeg(img, [hx0 - 3, hy0], P.fA, false);
+  drawSkirt(img, hx0, hy0, P.sk, P.fl || 0);
+  const nm = seg(M(), hx + 1, hy + 8, cx, cy - 2, 2.7); stamp(img, nm, PAL.skin, { d: 2 });
+  drawTorso(img, cx, cy, wx, wy);
+  drawHead(img, hx, hy, P);
+  drawScarfWrap(img, cx, cy);
+  const sN = [cx - 4, cy + 1], eN = ik(sN, P.hN, 15, 14, P.eN);
+  drawArm(img, sN, eN, P.hN, false);
+  const tip = drawSword(img, P.hN, P.sw, P.gl, fi);
+  drawHand(img, eN, P.hN, false);
+  return tip;
+}
+// ===== effects =====
+function arcFx(img, cx, cy, r, a0, a1, th, lead) {
+  const k = Math.ceil(r) + 1;
+  for (let y = cy - k; y <= cy + k; y++) for (let x = cx - k; x <= cx + k; x++) {
+    const d = Math.hypot(x - cx, y - cy); if (d > r) continue;
+    let an = Math.atan2(y - cy, x - cx) / D; while (an < a0) an += 360; while (an >= a0 + 360) an -= 360;
+    if (an > a1) continue;
+    const q = (an - a0) / (a1 - a0), lt = th * (lead ? 0.15 + 0.85 * q : 1 - 0.75 * Math.abs(q - 0.5) * 2);
+    if (lt < 1 || d < r - lt) continue;
+    const t = (d - (r - lt)) / lt;
+    img.set(x, y, t > 0.72 ? FX.p : t > 0.42 ? (q > 0.55 ? FX.w : FX.cl) : FX.c);
+  }
+}
+function spark(img, x, y, c, s) {
+  img.set(x, y, FX.w);
+  for (let i = 1; i <= s; i++) { const cc = i === s ? c : FX.w; img.set(x + i, y, cc); img.set(x - i, y, cc); img.set(x, y + i, cc); img.set(x, y - i, cc); }
+}
+function ring(img, cx, cy, rx, ry, ph) {
+  for (let i = 0; i < 56; i++) { const a = i / 56 * Math.PI * 2; img.set(R(cx + Math.cos(a) * rx), R(cy + Math.sin(a) * ry), (i + ph) % 8 < 4 ? FX.c : FX.p); }
+}
+const WAVE = { x: 0, y: 0 };
+function drawFx(img, P, tip, fi) {
+  const pa = (cx, cy, r, a) => [R(cx + Math.cos(a * D) * r), R(cy + Math.sin(a * D) * r)];
+  switch (P.fx) {
+    case 'slash':
+      arcFx(img, 80, 72, 56, -150, 18, 11, true);
+      for (const [a, c] of [[-120, FX.c], [-70, FX.p], [-20, FX.c]]) { const p = pa(80, 72, 49, a); spark(img, p[0], p[1], c, 2); }
+      spark(img, tip[0] - 3, tip[1] - 4, FX.p, 2); break;
+    case 'trail':
+      arcFx(img, 80, 72, 54, -70, 56, 6, true);
+      for (const [a, c] of [[-100, FX.p], [-55, FX.c], [-5, FX.p]]) { const p = pa(80, 72, 52, a); spark(img, p[0], p[1], c, 1); }
+      break;
+    case 'spark':
+      for (const [a, c] of [[-30, FX.c], [5, FX.p], [35, FX.c], [60, FX.p]]) { const p = pa(80, 72, 50, a); spark(img, p[0], p[1], c, 1); }
+      break;
+    case 'b0':
+      spark(img, P.hF[0] + 4, P.hF[1] - 1, FX.c, 1); spark(img, tip[0] + 2, tip[1] + 3, FX.p, 1); break;
+    case 'b1':
+      ring(img, tip[0], tip[1] + 5, 6, 2, fi); spark(img, tip[0], tip[1] - 3, FX.c, 2);
+      spark(img, P.hF[0] + 5, P.hF[1] - 2, FX.p, 1); spark(img, P.hN[0] - 7, P.hN[1] - 14, FX.c, 1); break;
+    case 'b2':
+      ring(img, tip[0], tip[1] + 6, 9, 3, fi); ring(img, tip[0], tip[1] + 18, 6, 2, fi + 3);
+      spark(img, tip[0], tip[1] - 4, FX.p, 3);
+      for (const [dx, dy, c] of [[-8, 10, FX.c], [7, 14, FX.p], [-6, 24, FX.p], [6, 28, FX.c]]) spark(img, tip[0] + dx, tip[1] + dy, c, 1);
+      for (let i = -4; i <= 4; i++) img.set(P.hF[0] + 4, P.hF[1] + i, (i & 1) ? FX.c : FX.p);
+      break;
+    case 'b3':
+      WAVE.x = tip[0]; WAVE.y = tip[1];
+      spark(img, tip[0], tip[1], FX.c, 3);
+      arcFx(img, WAVE.x + 4 - 8, WAVE.y, 8, -60, 60, 4, false); break;
+    case 'b4':
+      for (const [dy, c] of [[-4, FX.c], [0, FX.pl], [4, FX.p]]) line(img, WAVE.x + 1, WAVE.y + dy, WAVE.x + 7 - Math.abs(dy), WAVE.y + dy, c);
+      arcFx(img, WAVE.x + 8 - 20, WAVE.y, 20, -50, 50, 8, false);
+      arcFx(img, WAVE.x + 1 - 12, WAVE.y, 12, -45, 45, 4, false);
+      spark(img, WAVE.x - 2, WAVE.y - 14, FX.p, 1); spark(img, WAVE.x - 4, WAVE.y + 13, FX.c, 1); break;
+    case 'b5':
+      arcFx(img, WAVE.x + 10 - 26, WAVE.y, 26, -42, 42, 6, false);
+      arcFx(img, WAVE.x + 2 - 16, WAVE.y, 16, -40, 40, 3, false);
+      for (const [dx, dy, c] of [[4, -12, FX.c], [2, 12, FX.p], [9, 3, FX.c]]) spark(img, WAVE.x + dx, WAVE.y + dy, c, 1);
+      break;
+  }
+}
+
+// ===== poses (all joint coordinates are integers) =====
+function P(o, ox) {
+  ox = ox || 0;
+  const r = Object.assign({ tN: [150, -6, 5, 0], tF: [40, 6, 5, 0], sk: 0, fl: 0, sc: [115, -3, 8, 0], mouth: 'smile', gl: 1 }, o);
+  for (const k of ['h', 'c', 'hd', 'fA', 'fB', 'hN', 'eN', 'hF', 'eF']) r[k] = [r[k][0] + ox, r[k][1], r[k][2] || 0];
+  return r;
+}
+const ANIM = {};
+ANIM.idle = [
+  P({ h: [68, 86], c: [70, 61], hd: [72, 41], fA: [62, 136, 0], fB: [79, 136, 0], hN: [82, 82], eN: [66, 76], hF: [84, 79], eF: [86, 70], sw: 28, tN: [150, -6, 5, 0], tF: [40, 6, 5, 0], sk: 0, sc: [115, -3, 8, 0] }),
+  P({ h: [68, 87], c: [70, 62], hd: [72, 42], fA: [62, 136, 0], fB: [79, 136, 0], hN: [82, 83], eN: [66, 77], hF: [84, 80], eF: [86, 71], sw: 27, tN: [146, -5.4, 6, 1.4], tF: [44, 5.6, 6, 1.4], sk: -1, fl: 1, sc: [111, -3, 9, 1.2] })
+];
+(function () {
+  const foot = [[86, 134, -12], [78, 136, 0], [68, 136, 0], [56, 132, 35], [58, 120, 70], [74, 122, 25]];
+  const hipY = [85, 87, 83, 85, 87, 83];
+  const nH = [[60, 80], [62, 81], [68, 80], [84, 74], [82, 76], [74, 79]], nE = [[58, 68], [60, 69], [62, 72], [76, 80], [74, 80], [70, 78]];
+  const fH = [[92, 70], [90, 72], [84, 76], [72, 78], [74, 77], [82, 75]], fE = [[88, 78], [88, 78], [84, 80], [74, 70], [76, 70], [80, 74]];
+  const sw = [160, 158, 150, 138, 140, 150], sk = [-3, -4, -2, -3, -4, -2];
+  ANIM.run = foot.map((a, i) => {
+    const dy = hipY[i] - 85;
+    return P({ h: [70, hipY[i]], c: [76, 62 + dy], hd: [79, 42 + dy], fA: a, fB: foot[(i + 3) % 6], hN: nH[i], eN: nE[i], hF: fH[i], eF: fE[i], sw: sw[i],
+      tN: [172, -1.5, 14, i * 1.05], tF: [160, -1, 12, i * 1.05 + 0.8], sk: sk[i], fl: i % 2 ? 1 : -1, sc: [178, 0, 18, i * 1.05] });
+  });
+})();
+ANIM['attack-a'] = [
+  P({ h: [66, 88], c: [64, 63], hd: [66, 44], fA: [60, 136, 0], fB: [80, 136, 0], hN: [52, 50], eN: [48, 64], hF: [80, 72], eF: [78, 64], sw: 225, tN: [135, -7, 6, 0.5], tF: [60, 5, 6, 0.5], sk: 2, sc: [100, -4, 8, 0.4], mouth: 'line', gl: 1 }),
+  P({ h: [66, 89], c: [62, 64], hd: [64, 45], fA: [60, 136, 0], fB: [86, 132, -10], hN: [50, 48], eN: [46, 62], hF: [82, 70], eF: [78, 62], sw: 240, tN: [128, -7, 6, 1], tF: [66, 5, 6, 1], sk: 3, sc: [95, -4, 8, 0.8], mouth: 'line', gl: 2 }),
+  P({ h: [76, 88], c: [82, 64], hd: [84, 46], fA: [60, 136, 10], fB: [94, 136, 0], hN: [96, 76], eN: [88, 72], hF: [74, 80], eF: [80, 74], sw: 18, tN: [165, -3, 10, 2], tF: [150, -2, 10, 2], sk: -4, fl: 1, sc: [175, -1, 14, 2], mouth: 'open', gl: 2, fx: 'slash' }),
+  P({ h: [77, 89], c: [83, 66], hd: [86, 48], fA: [60, 136, 10], fB: [94, 136, 0], hN: [92, 92], eN: [88, 80], hF: [76, 82], eF: [82, 76], sw: 55, tN: [160, -4, 10, 2.8], tF: [130, 2, 10, 2.8], sk: -3, fl: -1, sc: [165, -2, 14, 2.8], mouth: 'open', gl: 2, fx: 'trail' }),
+  P({ h: [74, 87], c: [78, 63], hd: [81, 44], fA: [70, 131, 25], fB: [94, 136, 0], hN: [90, 86], eN: [82, 80], hF: [84, 78], eF: [86, 70], sw: 42, tN: [150, -6, 8, 3.6], tF: [80, 5, 8, 3.6], sk: -1, sc: [140, -4, 10, 3.6], gl: 1, fx: 'spark' }),
+  P({ h: [78, 86], c: [80, 61], hd: [82, 41], fA: [78, 136, 0], fB: [94, 136, 0], hN: [92, 82], eN: [80, 76], hF: [94, 78], eF: [96, 70], sw: 30, tN: [148, -6, 6, 4.4], tF: [48, 6, 6, 4.4], sk: 0, sc: [118, -3, 8, 4.4], gl: 1 })
+];
+ANIM['attack-b'] = [
+  P({ h: [66, 87], c: [67, 62], hd: [69, 42], fA: [60, 136, 0], fB: [80, 136, 0], hN: [58, 72], eN: [56, 64], hF: [86, 64], eF: [82, 72], sw: 230, tN: [140, -6, 6, 0], tF: [46, 6, 6, 0], sk: 1, sc: [112, -3, 8, 0], mouth: 'line', gl: 1, fx: 'b0' }, -12),
+  P({ h: [67, 86], c: [67, 60], hd: [69, 40], fA: [60, 136, 0], fB: [80, 136, 0], hN: [50, 50], eN: [52, 62], hF: [88, 58], eF: [82, 68], sw: 272, tN: [122, -4, 8, 0.8], tF: [56, 3, 8, 0.8], sk: 1, fl: -1, sc: [100, -2, 10, 0.8], gl: 2, fx: 'b1' }, -12),
+  P({ h: [67, 85], c: [67, 59], hd: [69, 39], fA: [60, 136, 0], fB: [81, 135, -4], hN: [50, 48], eN: [52, 60], hF: [89, 57], eF: [83, 67], sw: 274, tN: [110, -3, 10, 1.6], tF: [62, 2, 10, 1.6], sk: 2, fl: -2, sc: [92, -2, 12, 1.6], gl: 2, fx: 'b2' }, -12),
+  P({ h: [74, 87], c: [80, 62], hd: [83, 43], fA: [62, 136, 0], fB: [88, 136, 0], hN: [96, 63], eN: [86, 70], hF: [70, 78], eF: [76, 72], sw: -6, tN: [165, -3, 10, 2.4], tF: [150, -2, 10, 2.4], sk: -4, fl: 1, sc: [176, -1, 14, 2.4], mouth: 'open', gl: 2, fx: 'b3' }, -12),
+  P({ h: [75, 88], c: [81, 63], hd: [84, 44], fA: [62, 136, 0], fB: [88, 136, 0], hN: [97, 64], eN: [87, 71], hF: [72, 80], eF: [78, 74], sw: -4, tN: [160, -4, 10, 3.2], tF: [135, 1, 10, 3.2], sk: -3, fl: -1, sc: [168, -2, 14, 3.2], mouth: 'open', gl: 2, fx: 'b4' }, -12),
+  P({ h: [72, 87], c: [76, 62], hd: [79, 42], fA: [62, 136, 0], fB: [88, 136, 0], hN: [90, 78], eN: [80, 76], hF: [80, 76], eF: [84, 68], sw: 20, tN: [150, -5, 8, 4], tF: [70, 5, 8, 4], sk: -1, sc: [140, -3, 10, 4], gl: 1, fx: 'b5' }, -12)
+];
+function renderFrame(p, fi) { const img = new Img(); const tip = drawChar(img, p, fi); drawFx(img, p, tip, fi); return img; }
+// ===== page =====
+const ORDER = ['idle', 'run', 'attack-a', 'attack-b'];
+const TIMING = { idle: 500, run: 90, 'attack-a': 100, 'attack-b': 100 };
+const FR = {};
+for (const k of ORDER) FR[k] = ANIM[k].map((p, i) => new ImageData(renderFrame(p, i).d, W, H));
+function paint(cv, id) { const x = cv.getContext('2d'); x.imageSmoothingEnabled = false; x.clearRect(0, 0, W, H); x.putImageData(id, 0, 0); }
+function mk(w, h) { const c = document.createElement('canvas'); c.width = W; c.height = H; c.style.width = w + 'px'; c.style.height = h + 'px'; return c; }
+function cell(c, label) {
+  const e = document.createElement('div'); e.className = 'cell';
+  const b = document.createElement('div'); b.className = 'chk'; b.appendChild(c); e.appendChild(b);
+  const s = document.createElement('span'); s.className = 'lbl'; s.textContent = label; e.appendChild(s);
+  return e;
+}
+const cs = document.getElementById('contact-sheet');
+for (const k of ORDER) FR[k].forEach((id, i) => { const c = mk(280, 336); c.dataset.contactFrame = k + ':' + i; paint(c, id); cs.appendChild(cell(c, k + ':' + i)); });
+const ns = document.getElementById('native-size-example');
+[['idle', 0], ['run', 1], ['attack-a', 2], ['attack-b', 4]].forEach(([k, i]) => { const c = mk(140, 168); paint(c, FR[k][i]); ns.appendChild(cell(c, k + ':' + i + ' @1×')); });
+const es = document.getElementById('equal-display-size-example');
+[['idle', 0], ['attack-b', 2]].forEach(([k, i]) => { const c = mk(480, 576); paint(c, FR[k][i]); es.appendChild(cell(c, k + ':' + i + ' · 480×576 CSS px')); });
+const prev = ORDER.map(k => ({ k, c: document.querySelector('[data-animation-preview="' + k + '"]'), last: -1 }));
+const t0 = performance.now();
+function tick(now) {
+  const t = now - t0;
+  for (const p of prev) {
+    const n = FR[p.k].length, ms = TIMING[p.k];
+    const i = (p.k === 'idle' || p.k === 'run') ? Math.floor(t / ms) % n : Math.min(n - 1, Math.floor((t % (n * ms + 400)) / ms));
+    if (i !== p.last) { paint(p.c, FR[p.k][i]); p.last = i; }
+  }
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+
+// ===== self test (read by external checks) =====
+(function () {
+  const rep = { counts: {}, canvases: 0, badSize: 0, frames: [], errors: window.__errs };
+  for (const k of ORDER) rep.counts[k] = FR[k].length;
+  document.querySelectorAll('canvas').forEach(c => { rep.canvases++; if (c.width !== W || c.height !== H) rep.badSize++; });
+  for (const k of ORDER) FR[k].forEach((id, i) => {
+    const d = id.data; let n = 0, partial = 0, edge = 0, x0 = W, y0 = H, x1 = -1, y1 = -1;
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      const a = d[(y * W + x) * 4 + 3]; if (a && a !== 255) partial++;
+      if (!a) continue; n++;
+      if (x === 0 || y === 0 || x === W - 1 || y === H - 1) edge++;
+      x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y);
+    }
+    rep.frames.push({ f: k + ':' + i, n, partial, edge, corner: d[3], bbox: [x0, y0, x1, y1] });
+  });
+  rep.contact = document.querySelectorAll('[data-contact-frame]').length;
+  rep.ok = rep.counts.idle === 2 && rep.counts.run === 6 && rep.counts['attack-a'] === 6 && rep.counts['attack-b'] === 6 && !rep.badSize && rep.contact === 20 && rep.frames.every(f => f.n > 1500 && !f.partial && !f.edge && !f.corner) && !rep.errors.length;
+  window.__selftest = rep;
+  document.getElementById('selftest').textContent = 'SELFTEST ' + JSON.stringify(rep);
+})();
+</script>
+</body>
+</html>
